@@ -5,7 +5,12 @@ from scipy.stats import poisson
 from datetime import datetime
 
 try:
-    from drive_utils import salvar_csv_drive, drive_disponivel
+    from drive_utils import (
+        salvar_csv_drive, drive_disponivel,
+        salvar_historico_drive, carregar_historico_drive,
+        salvar_jogos_drive, carregar_jogos_drive,
+        carregar_modelo_drive, ligar_ligas_drive,
+    )
     _DRIVE_OK = True
 except ImportError:
     _DRIVE_OK = False
@@ -177,6 +182,38 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("### Ligas")
 
+    # ── Carregar liga salva no Drive ──────────────────────────────────────────
+    if _DRIVE_OK and drive_disponivel() and len(st.session_state.ligas) == 0:
+        ligas_drive = ligar_ligas_drive("faltas_eu")
+        if ligas_drive:
+            st.markdown("**☁️ Ligas salvas no Drive:**")
+            for lg in ligas_drive:
+                if st.button(f"↓ Carregar {lg}", key=f"load_drive_{lg}", use_container_width=True):
+                    df_f = carregar_historico_drive(lg, "faltas_eu")
+                    df_j = carregar_jogos_drive(lg, "faltas_eu")
+                    df_h = carregar_modelo_drive(lg, "faltas_eu")
+                    if df_f is not None:
+                        if "TotalFouls" not in df_f.columns:
+                            df_f["TotalFouls"] = df_f["HomeFouls"].astype(float) + df_f["AwayFouls"].astype(float)
+                        if df_j is None:
+                            df_j = pd.DataFrame(columns=["rodada", "HomeTeam", "AwayTeam"])
+                        if df_h is None:
+                            df_h = pd.DataFrame(columns=COLS_MODELO)
+                        st.session_state.ligas[lg] = {
+                            "df": df_f,
+                            "df_jogos": df_j,
+                            "historico": df_h,
+                            "historico_original": df_h.copy(),
+                            "tem_arbitro_jogos": "arbitro" in df_j.columns,
+                            "tem_arbitro_faltas": "arbitro" in df_f.columns,
+                            "subtipo": "faltas_eu",
+                        }
+                        st.success(f"'{lg}' carregada do Drive!")
+                        st.rerun()
+                    else:
+                        st.error(f"Erro ao carregar '{lg}' do Drive.")
+            st.markdown("---")
+
     with st.expander("➕  Adicionar liga", expanded=len(st.session_state.ligas) == 0):
         nome_liga   = st.text_input("Nome da liga", placeholder="Ex: Alemanha, Brasil...", key="inp_nome")
         f_faltas_up = st.file_uploader("CSV histórico de faltas", type=["csv"], key="up_faltas",
@@ -200,7 +237,6 @@ with st.sidebar:
                     df_f["TotalFouls"] = df_f["HomeFouls"] + df_f["AwayFouls"]
 
                 df_j = pd.read_csv(f_jogos_up)
-                # normalizar colunas do df de jogos
                 col_map = {"homeTeam": "HomeTeam", "awayTeam": "AwayTeam",
                            "Rodada": "rodada", "Round": "rodada"}
                 df_j = df_j.rename(columns=col_map)
@@ -217,7 +253,17 @@ with st.sidebar:
                     "historico_original": df_h.copy(),
                     "tem_arbitro_jogos": tem_arbitro_jogos,
                     "tem_arbitro_faltas": tem_arbitro_faltas,
+                    "subtipo": "faltas_eu",
                 }
+
+                # Salvar automaticamente no Drive
+                if _DRIVE_OK and drive_disponivel():
+                    salvar_historico_drive(df_f, nome_liga, "faltas_eu")
+                    salvar_jogos_drive(df_j, nome_liga, "faltas_eu")
+                    if not df_h.empty:
+                        nome_csv = f"model_{nome_liga.lower().replace(' ','_')}FALTAS.csv"
+                        salvar_csv_drive(df_h, nome_csv, "faltas_eu")
+
                 st.success(f"'{nome_liga}' adicionada!")
                 st.rerun()
 
@@ -483,6 +529,12 @@ with aba_analise:
                     ignore_index=True
                 )
                 st.session_state.ligas[liga_ativa]["historico"] = novo_hist
+
+                # Auto-salvar no Drive
+                if _DRIVE_OK and drive_disponivel():
+                    nome_drive = f"model_{liga_ativa.lower().replace(' ','_')}FALTAS.csv"
+                    salvar_csv_drive(novo_hist, nome_drive, "faltas_eu")
+
                 st.success(f"✓  {home} vs {away} salvo.")
                 st.rerun()
 
