@@ -84,8 +84,9 @@ def salvar_csv_drive(df: pd.DataFrame, nome_arquivo: str, subtipo: str) -> bool:
         except gspread.WorksheetNotFound:
             ws = sh.add_worksheet(title=aba, rows=max(len(df) + 10, 100), cols=max(len(df.columns) + 5, 30))
 
-        # Escrever cabeçalho + dados
-        dados = [df.columns.tolist()] + df.astype(str).values.tolist()
+        # Escrever cabeçalho + dados (substituir NaN por string vazia)
+        df_clean = df.fillna("").astype(str).replace("nan", "")
+        dados = [df_clean.columns.tolist()] + df_clean.values.tolist()
         ws.update(dados, value_input_option="RAW")
         return True
 
