@@ -543,12 +543,58 @@ if so_hoje and not df_all.empty:
 # ─── STATS ─────────────────────────────────────────────────────────────────────
 
 st.markdown("")
-pend   = len(df_all[~df_all["uid"].isin(st.session_state.removidas)])
-feitas = len([u for u in df_all["uid"] if u in st.session_state.removidas])
-pend_c = len(df_c[~df_c["uid"].isin(st.session_state.removidas)]) if not df_c.empty else 0
-pend_f = len(df_f[~df_f["uid"].isin(st.session_state.removidas)]) if not df_f.empty else 0
-avg_edge = df_all[~df_all["uid"].isin(st.session_state.removidas)]["Edge"].mean()
-avg_odd  = df_all[~df_all["uid"].isin(st.session_state.removidas)]["Odd"].mean()
+
+if df_all.empty:
+    # Tela bonita de "sem jogos"
+    hora_atual = agora_brt().strftime("%H:%M")
+    data_atual = data_ref_val.strftime("%d/%m/%Y")
+
+    if so_hoje:
+        titulo  = "Nenhum jogo pendente"
+        subtit  = f"Todos os jogos de hoje ({data_atual}) já aconteceram ou não há bets com os filtros aplicados."
+        emoji   = "✅"
+        dica    = f"Hora atual (BRT): {hora_atual} · Ajuste os filtros ou mude a data de referência na sidebar."
+    else:
+        titulo  = "Nenhuma bet encontrada"
+        subtit  = "Nenhum registro bate com os filtros atuais."
+        emoji   = "🔍"
+        dica    = "Tente reduzir o Edge mín, o Diff mín ou ampliar os mercados selecionados."
+
+    st.markdown(f"""
+    <div style="
+        background: #0d1117;
+        border: 1px solid #1c2128;
+        border-radius: 16px;
+        padding: 3rem 2rem;
+        text-align: center;
+        margin-top: 2rem;
+    ">
+        <div style="font-size:48px;margin-bottom:1rem;">{emoji}</div>
+        <div style="font-size:20px;font-weight:700;color:#e6edf3;margin-bottom:.5rem;">{titulo}</div>
+        <div style="font-size:14px;color:#6e7681;max-width:480px;margin:0 auto .8rem;">{subtit}</div>
+        <div style="
+            display:inline-block;
+            background:#161b22;
+            border:1px solid #1c2128;
+            border-radius:8px;
+            padding:.4rem 1rem;
+            font-size:11px;
+            color:#6e7681;
+            font-family:'DM Mono',monospace;
+            margin-top:.5rem;
+        ">{dica}</div>
+    </div>
+    """, unsafe_allow_html=True)
+    st.stop()
+
+# df_all não está vazio — calcular stats normalmente
+df_pend     = df_all[~df_all["uid"].isin(st.session_state.removidas)]
+pend        = len(df_pend)
+feitas      = len([u for u in df_all["uid"] if u in st.session_state.removidas])
+pend_c      = len(df_c[~df_c["uid"].isin(st.session_state.removidas)]) if not df_c.empty else 0
+pend_f      = len(df_f[~df_f["uid"].isin(st.session_state.removidas)]) if not df_f.empty else 0
+avg_edge    = df_pend["Edge"].mean() if not df_pend.empty else float("nan")
+avg_odd     = df_pend["Odd"].mean()  if not df_pend.empty else float("nan")
 
 sc1,sc2,sc3,sc4,sc5,sc6 = st.columns(6)
 with sc1: st.markdown(f'<div class="stat-pill"><div class="val">{pend}</div><div class="lbl">Pendentes</div></div>', unsafe_allow_html=True)
@@ -557,13 +603,6 @@ with sc3: st.markdown(f'<div class="stat-pill"><div class="val">{pend_c}</div><d
 with sc4: st.markdown(f'<div class="stat-pill"><div class="val">{pend_f}</div><div class="lbl">Faltas pend.</div></div>', unsafe_allow_html=True)
 with sc5: st.markdown(f'<div class="stat-pill"><div class="val">{avg_edge*100:+.1f}%</div><div class="lbl">Edge médio</div></div>' if not pd.isna(avg_edge) else '<div class="stat-pill"><div class="val">—</div><div class="lbl">Edge médio</div></div>', unsafe_allow_html=True)
 with sc6: st.markdown(f'<div class="stat-pill"><div class="val">{avg_odd:.2f}</div><div class="lbl">Odd média</div></div>' if not pd.isna(avg_odd) else '<div class="stat-pill"><div class="val">—</div><div class="lbl">Odd média</div></div>', unsafe_allow_html=True)
-
-if df_all.empty:
-    if so_hoje:
-        st.info(f"Nenhuma bet restante para hoje ({data_ref_val.strftime('%d/%m/%Y')}) com os filtros aplicados.")
-    else:
-        st.info("Nenhuma bet com os filtros aplicados.")
-    st.stop()
 
 # ─── CARDS (agrupados por data) ────────────────────────────────────────────────
 
