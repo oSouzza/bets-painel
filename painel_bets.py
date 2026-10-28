@@ -1,7 +1,13 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from datetime import datetime, date
+from datetime import datetime, date, timezone, timedelta
+
+try:
+    from drive_utils import listar_csvs_drive, baixar_csv_drive, drive_disponivel
+    _DRIVE_OK = True
+except ImportError:
+    _DRIVE_OK = False
 
 st.set_page_config(page_title="Painel de Bets", page_icon="🎯", layout="wide", initial_sidebar_state="expanded")
 
@@ -23,7 +29,6 @@ div[data-testid="stNumberInput"] input, div[data-testid="stTextInput"] input, di
 .badge-neg { font-family:'DM Mono',monospace; font-size:12px; font-weight:500; background:#2d1111; color:#f85149; border:1px solid #da3633; border-radius:5px; padding:1px 8px; }
 .badge-neu { font-family:'DM Mono',monospace; font-size:12px; font-weight:500; background:#131d2e; color:#79c0ff; border:1px solid #388bfd; border-radius:5px; padding:1px 8px; }
 
-/* Cards com fundo levemente mais fraco e borda lateral mais grossa */
 .bet-card {
     background: #0b0e14;
     border: 1px solid #161b22;
@@ -63,7 +68,6 @@ div[data-testid="stNumberInput"] input, div[data-testid="stTextInput"] input, di
 
 .time-group { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.15em; color:#6e7681; border-bottom:1px solid #1c2128; padding-bottom:4px; margin:1.4rem 0 .8rem; }
 
-/* Relógio / momento do dia */
 .momento-box {
     background: #0d1117;
     border: 1px solid #1c2128;
@@ -76,25 +80,48 @@ div[data-testid="stNumberInput"] input, div[data-testid="stTextInput"] input, di
 .momento-hora { font-family:'DM Mono',monospace; font-size:20px; font-weight:500; color:#e6edf3; }
 .momento-label { font-size:11px; color:#6e7681; text-transform:uppercase; letter-spacing:.08em; }
 
-/* Separador de filtros */
+/* Cabeçalho de filtros clicável */
+.filter-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    cursor: pointer;
+    font-size:10px; font-weight:700; text-transform:uppercase;
+    letter-spacing:.12em; color:#6e7681;
+    border-bottom:1px solid #1c2128; padding-bottom:4px; margin:12px 0 0;
+    user-select: none;
+}
 .filter-section-title {
     font-size:10px; font-weight:700; text-transform:uppercase;
     letter-spacing:.12em; color:#6e7681;
     border-bottom:1px solid #1c2128; padding-bottom:4px; margin:12px 0 8px;
 }
+.badge-hoje { background:#0d2818;color:#3fb950;border:1px solid #2ea043;border-radius:4px;font-size:9px;padding:1px 6px;vertical-align:middle; }
+.badge-passada { background:#2d1111;color:#f85149;border:1px solid #da3633;border-radius:4px;font-size:9px;padding:1px 6px;vertical-align:middle; }
 </style>
 """, unsafe_allow_html=True)
+
+# ─── FUSO HORÁRIO ─────────────────────────────────────────────────────────────
+# Brasil (Brasília): UTC-3
+BRT = timezone(timedelta(hours=-3))
+
+def agora_brt():
+    return datetime.now(BRT)
 
 # ─── SESSION STATE ─────────────────────────────────────────────────────────────
 
 if "removidas" not in st.session_state:
     st.session_state.removidas = set()
-
 if "dfs" not in st.session_state:
     st.session_state.dfs = {}
-
 if "data_referencia" not in st.session_state:
-    st.session_state.data_referencia = date.today()
+    st.session_state.data_referencia = agora_brt().date()
+if "filtros_chutes_aberto" not in st.session_state:
+    st.session_state.filtros_chutes_aberto = True
+if "filtros_faltas_aberto" not in st.session_state:
+    st.session_state.filtros_faltas_aberto = True
+if "so_hoje" not in st.session_state:
+    st.session_state.so_hoje = True
 
 # ─── FUNÇÕES AUXILIARES ────────────────────────────────────────────────────────
 
@@ -112,10 +139,24 @@ def source_pill(fonte):
 def card_class(fonte):
     return "chutes" if fonte == "Chutes" else "faltas"
 
-def parse_date(v):
-    if pd.isna(v) or str(v).strip() == "": return pd.NaT
-    try: return pd.to_datetime(v)
-    except: return pd.NaT
+def parse_date_brt(v):
+    """
+    Converte a coluna de data para datetime com fuso BRT (UTC-3).
+    Suporta:
+      - ISO com tz info: "2026-10-27 17:30:00+00:00"  → converte para BRT
+      - ISO sem tz info: "2026-10-27 17:30:00"         → assume UTC, converte para BRT
+      - Só data:         "2026-10-27"                   → meia-noite BRT
+    """
+    if pd.isna(v) or str(v).strip() in ("", "nan", "NaT"):
+        return pd.NaT
+    try:
+        dt = pd.to_datetime(str(v), utc=True)          # força UTC se não tiver tz
+        return dt.tz_convert(BRT).replace(tzinfo=None)  # traz para BRT, remove tz para comparar
+    except Exception:
+        try:
+            return pd.to_datetime(str(v))
+        except Exception:
+            return pd.NaT
 
 def momento_do_dia(hora):
     if 5 <= hora < 12:  return "🌅", "Manhã"
@@ -137,7 +178,7 @@ def parse_chutes(df, nome_liga):
         ("Fora Under",  "Lambda_Away",  "Line_Away",   "Odd_Away_Under",  "Edge_Away_Under"),
     ]
     for _, r in df.iterrows():
-        data = parse_date(r.get("Date",""))
+        data = parse_date_brt(r.get("Date",""))
         for mercado, lam_col, line_col, odd_col, edge_col in mercados:
             lam  = r.get(lam_col, np.nan)
             line = r.get(line_col, np.nan)
@@ -174,8 +215,7 @@ def parse_faltas(df, nome_liga, fonte):
         ("Fora Under",  "Lambda_Away",  "Line_Away",  "Odd_Under_Away",  "Edge_Under_Away"),
     ]
     for _, r in df.iterrows():
-        # Faltas usa a data de CÁLCULO (quando foi gerado), não do jogo
-        data = parse_date(r.get("Date",""))
+        data = parse_date_brt(r.get("Date",""))
         rodada = str(r.get("Rodada","")) if "Rodada" in df.columns else ""
         stake_jogo = r.get("stake", np.nan) if "stake" in df.columns else np.nan
         for mercado, lam_col, line_col, odd_col, edge_col in mercados:
@@ -211,32 +251,49 @@ with st.sidebar:
     st.markdown("## 🎯 Painel de Bets")
     st.markdown("---")
 
-    # ── Relógio / data de referência ──
-    agora = datetime.now()
+    agora = agora_brt()
     emoji_momento, label_momento = momento_do_dia(agora.hour)
     st.markdown(f"""
     <div class="momento-box">
         <div>
             <div class="momento-hora">{agora.strftime('%H:%M')}</div>
-            <div class="momento-label">{emoji_momento} {label_momento} · {agora.strftime('%d/%m/%Y')}</div>
+            <div class="momento-label">{emoji_momento} {label_momento} · {agora.strftime('%d/%m/%Y')} BRT</div>
         </div>
     </div>
     """, unsafe_allow_html=True)
     st.markdown("")
 
-    # Data de referência manual (para filtrar jogos de hoje)
     data_ref = st.date_input(
         "Data de referência",
         value=st.session_state.data_referencia,
         key="data_ref_input",
-        help="Data usada para destacar jogos de hoje. Por padrão é o dia atual."
+        help="Data base para filtrar jogos. Por padrão é hoje (BRT)."
     )
     st.session_state.data_referencia = data_ref
 
     st.markdown("---")
     st.markdown('<p style="font-size:11px;color:#6e7681;text-transform:uppercase;letter-spacing:.08em;font-weight:600;">Carregar modelos</p>', unsafe_allow_html=True)
 
-    # CHUTES
+    if _DRIVE_OK and drive_disponivel():
+        with st.expander("☁️  Carregar do Drive", expanded=True):
+            if st.button("🔄  Atualizar do Drive", use_container_width=True, key="btn_drive_load"):
+                with st.spinner("Buscando CSVs no Drive..."):
+                    carregados = 0
+                    for subtipo, tipo_int in [("chutes","chutes"),("faltas_eu","faltas_eu"),("faltas_br","faltas_br")]:
+                        arquivos = listar_csvs_drive(subtipo)
+                        for arq in arquivos:
+                            chave = f"{tipo_int}_{arq['name'].replace('.csv','')}"
+                            df_drive = baixar_csv_drive(arq["id"])
+                            if df_drive is not None:
+                                st.session_state.dfs[chave] = (tipo_int, df_drive)
+                                carregados += 1
+                    if carregados:
+                        st.success(f"✓ {carregados} arquivo(s) carregado(s) do Drive")
+                        st.rerun()
+                    else:
+                        st.warning("Nenhum CSV encontrado no Drive.")
+        st.markdown("")
+
     with st.expander("🎯 Chutes", expanded=False):
         chutes_files = st.file_uploader("CSVs de chutes", type=["csv"], accept_multiple_files=True, key="up_chutes",
                                          help="model_*SHOTS*.csv — um por liga")
@@ -251,7 +308,6 @@ with st.sidebar:
                     except Exception as e:
                         st.error(f"Erro: {e}")
 
-    # FALTAS EU
     with st.expander("⚽ Faltas EU", expanded=False):
         eu_files = st.file_uploader("CSVs de faltas EU", type=["csv"], accept_multiple_files=True, key="up_faltas_eu",
                                      help="model_*FALTAS*.csv — um por liga")
@@ -267,7 +323,6 @@ with st.sidebar:
                     except Exception as e:
                         st.error(f"Erro: {e}")
 
-    # FALTAS BR
     with st.expander("🇧🇷 Faltas BR", expanded=False):
         br_files = st.file_uploader("CSVs de faltas BR", type=["csv"], accept_multiple_files=True, key="up_faltas_br",
                                      help="model_brasilFALTAS*.csv")
@@ -305,7 +360,7 @@ if not st.session_state.dfs:
         <p style="font-size:13px;color:#c9d1d9;">1. Na sidebar, expanda a seção do modelo desejado</p>
         <p style="font-size:13px;color:#c9d1d9;">2. Faça upload dos CSVs exportados de cada app</p>
         <p style="font-size:13px;color:#c9d1d9;">3. Aplique os filtros separados por modelo</p>
-        <p style="font-size:13px;color:#c9d1d9;">4. As bets aparecem ordenadas por data dos jogos</p>
+        <p style="font-size:13px;color:#c9d1d9;">4. As bets aparecem ordenadas por hora dos jogos</p>
         <p style="font-size:13px;color:#c9d1d9;">5. Clique em ✓ para marcar uma bet como feita</p>
         <br>
         <div style="display:flex;gap:10px;flex-wrap:wrap;">
@@ -341,64 +396,154 @@ df_bets["Data"] = pd.to_datetime(df_bets["Data"], errors="coerce")
 df_chutes = df_bets[df_bets["Fonte"] == "Chutes"].copy()
 df_faltas = df_bets[df_bets["Fonte"].isin(["Faltas EU","Faltas BR"])].copy()
 
-# ─── FILTROS ───────────────────────────────────────────────────────────────────
+# ─── CABEÇALHO + TOGGLE FILTROS ───────────────────────────────────────────────
 
 st.markdown('<h1 style="color:#e6edf3;font-size:22px;font-weight:600;margin-bottom:4px;">Painel de Bets</h1>', unsafe_allow_html=True)
 
+# Linha de controles rápidos: toggle filtros + filtro de hoje
+ctrl1, ctrl2, ctrl3 = st.columns([2, 2, 6])
+with ctrl1:
+    aberto_c = st.session_state.filtros_chutes_aberto
+    label_c = "🔽 Filtros Chutes" if aberto_c else "▶️ Filtros Chutes"
+    if st.button(label_c, key="toggle_chutes", use_container_width=True):
+        st.session_state.filtros_chutes_aberto = not aberto_c
+        st.rerun()
+with ctrl2:
+    aberto_f = st.session_state.filtros_faltas_aberto
+    label_f = "🔽 Filtros Faltas" if aberto_f else "▶️ Filtros Faltas"
+    if st.button(label_f, key="toggle_faltas", use_container_width=True):
+        st.session_state.filtros_faltas_aberto = not aberto_f
+        st.rerun()
+with ctrl3:
+    so_hoje = st.checkbox(
+        "📅 Só jogos de hoje e ainda a acontecer",
+        value=st.session_state.so_hoje,
+        key="chk_so_hoje",
+        help="Filtra pelos jogos da data de referência que ainda não começaram (hora BRT)"
+    )
+    st.session_state.so_hoje = so_hoje
+
 # ── Filtros CHUTES ──
-st.markdown('<div class="filter-section-title">🎯 Filtros — Chutes</div>', unsafe_allow_html=True)
-fc1, fc2, fc3, fc4 = st.columns([2, 2, 3, 2])
-with fc1:
-    edge_chutes = st.number_input("Edge mín (%)", value=3.0, step=0.5, format="%.1f", key="fc_edge")
-with fc2:
-    diff_chutes = st.number_input("Diff mín", value=0.0, step=0.5, format="%.1f", key="fc_diff")
-with fc3:
-    merc_chutes_disp = ["Total Over","Total Under","Casa Over","Casa Under","Fora Over","Fora Under"]
-    merc_chutes = st.multiselect("Mercado", merc_chutes_disp, default=merc_chutes_disp, key="fc_merc")
-with fc4:
-    rem_chutes = st.checkbox("Mostrar removidas", value=False, key="fc_rem")
+if st.session_state.filtros_chutes_aberto:
+    st.markdown('<div class="filter-section-title">🎯 Filtros — Chutes</div>', unsafe_allow_html=True)
+    fc1, fc2, fc3, fc4 = st.columns([2, 2, 3, 2])
+    with fc1:
+        edge_chutes = st.number_input("Edge mín (%)", value=3.0, step=0.5, format="%.1f", key="fc_edge")
+    with fc2:
+        diff_chutes = st.number_input("Diff mín", value=0.0, step=0.5, format="%.1f", key="fc_diff")
+    with fc3:
+        merc_chutes_disp = ["Total Over","Total Under","Casa Over","Casa Under","Fora Over","Fora Under"]
+        merc_chutes = st.multiselect("Mercado", merc_chutes_disp, default=merc_chutes_disp, key="fc_merc")
+    with fc4:
+        rem_chutes = st.checkbox("Mostrar removidas", value=False, key="fc_rem")
+else:
+    edge_chutes = st.session_state.get("fc_edge", 3.0)
+    diff_chutes = st.session_state.get("fc_diff", 0.0)
+    merc_chutes = st.session_state.get("fc_merc", ["Total Over","Total Under","Casa Over","Casa Under","Fora Over","Fora Under"])
+    rem_chutes  = st.session_state.get("fc_rem", False)
 
 # ── Filtros FALTAS ──
-st.markdown('<div class="filter-section-title">⚽ Filtros — Faltas</div>', unsafe_allow_html=True)
-ff1, ff2, ff3, ff4, ff5 = st.columns([2, 2, 3, 3, 2])
-with ff1:
-    edge_faltas = st.number_input("Edge mín (%)", value=3.0, step=0.5, format="%.1f", key="ff_edge")
-with ff2:
-    diff_faltas = st.number_input("Diff mín", value=0.0, step=0.5, format="%.1f", key="ff_diff")
-with ff3:
-    merc_faltas_disp = ["Total Over","Total Under","Casa Over","Casa Under","Fora Over","Fora Under"]
-    merc_faltas = st.multiselect("Mercado", merc_faltas_disp, default=merc_faltas_disp, key="ff_merc")
-with ff4:
-    fontes_faltas_disp = sorted(df_faltas["Fonte"].unique().tolist()) if not df_faltas.empty else ["Faltas EU","Faltas BR"]
-    fontes_faltas = st.multiselect("Fonte", fontes_faltas_disp, default=fontes_faltas_disp, key="ff_fonte")
-with ff5:
-    rem_faltas = st.checkbox("Mostrar removidas", value=False, key="ff_rem")
+if st.session_state.filtros_faltas_aberto:
+    st.markdown('<div class="filter-section-title">⚽ Filtros — Faltas</div>', unsafe_allow_html=True)
+
+    ff1, ff2, ff3, ff4, ff5 = st.columns([2, 2, 2, 2, 2])
+    with ff1:
+        edge_faltas = st.number_input("Edge mín (%)", value=3.0, step=0.5, format="%.1f", key="ff_edge")
+    with ff2:
+        diff_faltas = st.number_input("Diff mín (total)", value=0.0, step=0.5, format="%.1f", key="ff_diff")
+    with ff3:
+        diff_ind_faltas = st.number_input("Diff mín (indiv.)", value=0.0, step=0.5, format="%.1f", key="ff_diff_ind",
+                                           help="Diff mínimo para mercados individuais (Casa Over/Under, Fora Over/Under)")
+    with ff4:
+        fontes_faltas_disp = sorted(df_faltas["Fonte"].unique().tolist()) if not df_faltas.empty else ["Faltas EU","Faltas BR"]
+        fontes_faltas = st.multiselect("Fonte", fontes_faltas_disp, default=fontes_faltas_disp, key="ff_fonte")
+    with ff5:
+        rem_faltas = st.checkbox("Mostrar removidas", value=False, key="ff_rem")
+
+    ff_a, ff_b = st.columns(2)
+    with ff_a:
+        merc_total_disp = ["Total Over","Total Under"]
+        merc_total = st.multiselect("Mercado Total", merc_total_disp, default=merc_total_disp, key="ff_merc_total")
+    with ff_b:
+        merc_ind_disp = ["Casa Over","Casa Under","Fora Over","Fora Under"]
+        merc_ind = st.multiselect("Mercado Individual", merc_ind_disp, default=merc_ind_disp, key="ff_merc_ind")
+else:
+    edge_faltas     = st.session_state.get("ff_edge", 3.0)
+    diff_faltas     = st.session_state.get("ff_diff", 0.0)
+    diff_ind_faltas = st.session_state.get("ff_diff_ind", 0.0)
+    fontes_faltas   = st.session_state.get("ff_fonte", ["Faltas EU","Faltas BR"])
+    rem_faltas      = st.session_state.get("ff_rem", False)
+    merc_total      = st.session_state.get("ff_merc_total", ["Total Over","Total Under"])
+    merc_ind        = st.session_state.get("ff_merc_ind", ["Casa Over","Casa Under","Fora Over","Fora Under"])
 
 # ─── APLICAR FILTROS ───────────────────────────────────────────────────────────
 
-def filtrar(df, min_edge, min_diff, mercados, fontes=None, mostrar_rem=False):
+def filtrar_chutes(df, min_edge, min_diff, mercados, mostrar_rem=False):
     if df.empty: return df
     mask = (
         (df["Edge"] >= min_edge / 100) &
         (df["Diff"].fillna(0) >= min_diff) &
         (df["Mercado"].isin(mercados))
     )
-    if fontes:
-        mask = mask & df["Fonte"].isin(fontes)
     result = df[mask].copy()
     if not mostrar_rem:
         result = result[~result["uid"].isin(st.session_state.removidas)]
     return result.sort_values("Data", na_position="last").reset_index(drop=True)
 
-df_c = filtrar(df_chutes, edge_chutes, diff_chutes, merc_chutes, mostrar_rem=rem_chutes)
-df_f = filtrar(df_faltas, edge_faltas, diff_faltas, merc_faltas, fontes=fontes_faltas, mostrar_rem=rem_faltas)
+def filtrar_faltas(df, min_edge, min_diff_total, min_diff_ind, merc_total_sel, merc_ind_sel, fontes=None, mostrar_rem=False):
+    if df.empty: return df
+    mercados_totais = [m for m in merc_total_sel if m in ["Total Over","Total Under"]]
+    mercados_ind    = [m for m in merc_ind_sel   if m in ["Casa Over","Casa Under","Fora Over","Fora Under"]]
+
+    # Máscara para totais (diff = diff do jogo inteiro)
+    mask_total = (
+        df["Mercado"].isin(mercados_totais) &
+        (df["Edge"] >= min_edge / 100) &
+        (df["Diff"].fillna(0) >= min_diff_total)
+    )
+    # Máscara para individuais (diff separado)
+    mask_ind = (
+        df["Mercado"].isin(mercados_ind) &
+        (df["Edge"] >= min_edge / 100) &
+        (df["Diff"].fillna(0) >= min_diff_ind)
+    )
+    mask = mask_total | mask_ind
+    if fontes:
+        mask = mask & df["Fonte"].isin(fontes)
+
+    result = df[mask].copy()
+    if not mostrar_rem:
+        result = result[~result["uid"].isin(st.session_state.removidas)]
+    return result.sort_values("Data", na_position="last").reset_index(drop=True)
+
+df_c = filtrar_chutes(df_chutes, edge_chutes, diff_chutes, merc_chutes, mostrar_rem=rem_chutes)
+df_f = filtrar_faltas(df_faltas, edge_faltas, diff_faltas, diff_ind_faltas,
+                      merc_total, merc_ind, fontes=fontes_faltas, mostrar_rem=rem_faltas)
 
 df_all = pd.concat([df_c, df_f], ignore_index=True).sort_values("Data", na_position="last").reset_index(drop=True)
+
+# ─── FILTRO: SÓ HOJE E AINDA A ACONTECER ──────────────────────────────────────
+
+data_ref_val = st.session_state.data_referencia
+agora_dt     = agora_brt().replace(tzinfo=None)  # sem tz para comparar com Data (sem tz após conversão)
+
+if so_hoje and not df_all.empty:
+    # Manter só jogos da data de referência
+    df_all = df_all[df_all["Data"].dt.date == data_ref_val].copy()
+
+    # Remover jogos cujo horário já passou (quando há hora disponível)
+    # Se a hora for 00:00 provavelmente é só data sem hora → mantém
+    def ainda_vai_acontecer(dt):
+        if pd.isna(dt): return True          # sem data → mantém
+        if dt.hour == 0 and dt.minute == 0: return True  # só data, sem hora → mantém
+        return dt > agora_dt                  # compara com agora em BRT
+
+    df_all = df_all[df_all["Data"].apply(ainda_vai_acontecer)].reset_index(drop=True)
 
 # ─── STATS ─────────────────────────────────────────────────────────────────────
 
 st.markdown("")
-pend  = len(df_all[~df_all["uid"].isin(st.session_state.removidas)])
+pend   = len(df_all[~df_all["uid"].isin(st.session_state.removidas)])
 feitas = len([u for u in df_all["uid"] if u in st.session_state.removidas])
 pend_c = len(df_c[~df_c["uid"].isin(st.session_state.removidas)]) if not df_c.empty else 0
 pend_f = len(df_f[~df_f["uid"].isin(st.session_state.removidas)]) if not df_f.empty else 0
@@ -414,17 +559,18 @@ with sc5: st.markdown(f'<div class="stat-pill"><div class="val">{avg_edge*100:+.
 with sc6: st.markdown(f'<div class="stat-pill"><div class="val">{avg_odd:.2f}</div><div class="lbl">Odd média</div></div>' if not pd.isna(avg_odd) else '<div class="stat-pill"><div class="val">—</div><div class="lbl">Odd média</div></div>', unsafe_allow_html=True)
 
 if df_all.empty:
-    st.info("Nenhuma bet com os filtros aplicados.")
+    if so_hoje:
+        st.info(f"Nenhuma bet restante para hoje ({data_ref_val.strftime('%d/%m/%Y')}) com os filtros aplicados.")
+    else:
+        st.info("Nenhuma bet com os filtros aplicados.")
     st.stop()
 
 # ─── CARDS (agrupados por data) ────────────────────────────────────────────────
 
 st.markdown("")
 
-data_ref_val = st.session_state.data_referencia
-
 df_all["_date_key"] = df_all["Data"].dt.date.astype(str)
-datas_unicas = df_all["_date_key"].unique()
+datas_unicas = sorted(df_all["_date_key"].unique())
 
 for data_str in datas_unicas:
     grupo = df_all[df_all["_date_key"] == data_str]
@@ -433,7 +579,7 @@ for data_str in datas_unicas:
         d = datetime.strptime(data_str, "%Y-%m-%d").date()
         label_data = datetime(d.year, d.month, d.day).strftime("%A, %d/%m/%Y").capitalize()
         is_hoje = (d == data_ref_val)
-        hoje_badge = ' &nbsp;<span style="background:#0d2818;color:#3fb950;border:1px solid #2ea043;border-radius:4px;font-size:9px;padding:1px 6px;vertical-align:middle;">HOJE</span>' if is_hoje else ''
+        hoje_badge = ' &nbsp;<span class="badge-hoje">HOJE</span>' if is_hoje else ''
     except:
         label_data = data_str if data_str != "NaT" else "Sem data"
         hoje_badge = ""
