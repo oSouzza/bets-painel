@@ -14,8 +14,8 @@ SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
 ]
 
-# Nome da pasta raiz no Drive
-PASTA_RAIZ = "bets_modelos"
+# ID da pasta raiz no Drive (compartilhada com a service account)
+PASTA_RAIZ_ID = "12fvtXVYLI1rsB_UhACAIVW9GIfShD8G3"
 
 # Subpastas por tipo de modelo
 SUBPASTAS = {
@@ -61,15 +61,8 @@ def listar_csvs_drive(subtipo: str) -> list[dict]:
     """
     try:
         service = _get_drive_service()
-        # Encontrar ID da pasta raiz
-        res = service.files().list(
-            q=f"name='{PASTA_RAIZ}' and mimeType='application/vnd.google-apps.folder' and trashed=false",
-            fields="files(id,name)"
-        ).execute()
-        raiz_files = res.get("files", [])
-        if not raiz_files:
-            return []
-        raiz_id = raiz_files[0]["id"]
+        # Usar ID direto da pasta raiz
+        raiz_id = PASTA_RAIZ_ID
 
         # Encontrar subpasta
         nome_sub = SUBPASTAS.get(subtipo, subtipo)
@@ -117,16 +110,8 @@ def salvar_csv_drive(df: pd.DataFrame, nome_arquivo: str, subtipo: str) -> bool:
         from googleapiclient.http import MediaIoBaseUpload
         service = _get_drive_service()
 
-        # Resolver IDs de pasta
-        res = service.files().list(
-            q=f"name='{PASTA_RAIZ}' and mimeType='application/vnd.google-apps.folder' and trashed=false",
-            fields="files(id)"
-        ).execute()
-        raiz_files = res.get("files", [])
-        if not raiz_files:
-            st.error(f"❌ Pasta '{PASTA_RAIZ}' não encontrada no Drive. Crie-a e compartilhe com a service account.")
-            return False
-        raiz_id = raiz_files[0]["id"]
+        # Usar ID direto da pasta raiz
+        raiz_id = PASTA_RAIZ_ID
 
         nome_sub = SUBPASTAS.get(subtipo, subtipo)
         res2 = service.files().list(
