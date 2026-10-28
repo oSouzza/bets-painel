@@ -4,6 +4,12 @@ import numpy as np
 from scipy.stats import poisson
 from datetime import datetime
 
+try:
+    from drive_utils import salvar_csv_drive, drive_disponivel
+    _DRIVE_OK = True
+except ImportError:
+    _DRIVE_OK = False
+
 st.set_page_config(page_title="Faltas Analyzer", page_icon="⚽", layout="wide", initial_sidebar_state="expanded")
 
 st.markdown("""
@@ -577,20 +583,34 @@ with aba_historico:
         a1, a2, a3 = st.columns(3)
 
         with a1:
+            nome_csv  = f"model_{liga_ativa.lower().replace(' ','_')}FALTAS.csv"
             csv_bytes = hist.to_csv(index=False).encode("utf-8")
-            nome_csv  = f"model_{liga_ativa.lower().replace(' ','_')}_{datetime.now().strftime('%Y%m%d_%H%M')}.csv"
             st.download_button(f"⬇️  Exportar {liga_ativa}", data=csv_bytes,
                                file_name=nome_csv, mime="text/csv", use_container_width=True)
 
         with a2:
-            if st.button("🗑️  Apagar último jogo", use_container_width=True):
-                st.session_state.ligas[liga_ativa]["historico"] = hist.iloc[:-1].reset_index(drop=True)
-                st.success("Último jogo removido.")
-                st.rerun()
+            if _DRIVE_OK and drive_disponivel():
+                if st.button("☁️  Salvar no Drive", use_container_width=True, key="drive_save"):
+                    subtipo = "faltas_br" if "brasil" in liga_ativa.lower() or "br" in liga_ativa.lower() else "faltas_eu"
+                    nome_drive = f"model_{liga_ativa.lower().replace(' ','_')}FALTAS.csv"
+                    ok = salvar_csv_drive(hist, nome_drive, subtipo)
+                    if ok:
+                        st.success(f"✓ Salvo no Drive: {nome_drive}")
+            else:
+                if st.button("🗑️  Apagar último jogo", use_container_width=True):
+                    st.session_state.ligas[liga_ativa]["historico"] = hist.iloc[:-1].reset_index(drop=True)
+                    st.success("Último jogo removido.")
+                    st.rerun()
 
         with a3:
-            if st.button("🗑️  Limpar sessão", use_container_width=True):
-                original = st.session_state.ligas[liga_ativa].get("historico_original")
-                st.session_state.ligas[liga_ativa]["historico"] = original.copy() if original is not None else pd.DataFrame(columns=COLS_MODELO)
-                st.success("Sessão limpa.")
-                st.rerun()
+            if _DRIVE_OK and drive_disponivel():
+                if st.button("🗑️  Apagar último jogo", use_container_width=True):
+                    st.session_state.ligas[liga_ativa]["historico"] = hist.iloc[:-1].reset_index(drop=True)
+                    st.success("Último jogo removido.")
+                    st.rerun()
+            else:
+                if st.button("🗑️  Limpar sessão", use_container_width=True):
+                    original = st.session_state.ligas[liga_ativa].get("historico_original")
+                    st.session_state.ligas[liga_ativa]["historico"] = original.copy() if original is not None else pd.DataFrame(columns=COLS_MODELO)
+                    st.success("Sessão limpa.")
+                    st.rerun()
