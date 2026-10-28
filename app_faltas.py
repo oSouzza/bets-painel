@@ -5,12 +5,7 @@ from scipy.stats import poisson
 from datetime import datetime
 
 try:
-    from drive_utils import (
-        salvar_csv_drive, drive_disponivel,
-        salvar_historico_drive, carregar_historico_drive,
-        salvar_jogos_drive, carregar_jogos_drive,
-        carregar_modelo_drive, ligar_ligas_drive,
-    )
+    from drive_utils import salvar_csv_drive, drive_disponivel
     _DRIVE_OK = True
 except ImportError:
     _DRIVE_OK = False
@@ -181,38 +176,6 @@ with st.sidebar:
     st.markdown("## ⚽ Faltas Analyzer")
     st.markdown("---")
     st.markdown("### Ligas")
-
-    # ── Carregar liga salva no Drive ──────────────────────────────────────────
-    if _DRIVE_OK and drive_disponivel() and len(st.session_state.ligas) == 0:
-        ligas_drive = ligar_ligas_drive("faltas_eu")
-        if ligas_drive:
-            st.markdown("**☁️ Ligas salvas no Drive:**")
-            for lg in ligas_drive:
-                if st.button(f"↓ Carregar {lg}", key=f"load_drive_{lg}", use_container_width=True):
-                    df_f = carregar_historico_drive(lg, "faltas_eu")
-                    df_j = carregar_jogos_drive(lg, "faltas_eu")
-                    df_h = carregar_modelo_drive(lg, "faltas_eu")
-                    if df_f is not None:
-                        if "TotalFouls" not in df_f.columns:
-                            df_f["TotalFouls"] = df_f["HomeFouls"].astype(float) + df_f["AwayFouls"].astype(float)
-                        if df_j is None:
-                            df_j = pd.DataFrame(columns=["rodada", "HomeTeam", "AwayTeam"])
-                        if df_h is None:
-                            df_h = pd.DataFrame(columns=COLS_MODELO)
-                        st.session_state.ligas[lg] = {
-                            "df": df_f,
-                            "df_jogos": df_j,
-                            "historico": df_h,
-                            "historico_original": df_h.copy(),
-                            "tem_arbitro_jogos": "arbitro" in df_j.columns,
-                            "tem_arbitro_faltas": "arbitro" in df_f.columns,
-                            "subtipo": "faltas_eu",
-                        }
-                        st.success(f"'{lg}' carregada do Drive!")
-                        st.rerun()
-                    else:
-                        st.error(f"Erro ao carregar '{lg}' do Drive.")
-            st.markdown("---")
 
     with st.expander("➕  Adicionar liga", expanded=len(st.session_state.ligas) == 0):
         nome_liga   = st.text_input("Nome da liga", placeholder="Ex: Alemanha, Brasil...", key="inp_nome")
@@ -529,12 +492,6 @@ with aba_analise:
                     ignore_index=True
                 )
                 st.session_state.ligas[liga_ativa]["historico"] = novo_hist
-
-                # Auto-salvar no Drive
-                if _DRIVE_OK and drive_disponivel():
-                    nome_drive = f"model_{liga_ativa.lower().replace(' ','_')}FALTAS.csv"
-                    salvar_csv_drive(novo_hist, nome_drive, "faltas_eu")
-
                 st.success(f"✓  {home} vs {away} salvo.")
                 st.rerun()
 
@@ -578,22 +535,92 @@ with aba_apostas:
         rodadas_disponiveis = sorted(hist["Rodada"].dropna().unique().tolist(), key=lambda x: str(x), reverse=True)
         rodada_sel = st.selectbox("Rodada", rodadas_disponiveis, key="rodada_apostas") if rodadas_disponiveis else None
 
+        def render_apostas_individuais(df_render, titulo):
+            """Mostra cards de aposta individual (casa ou fora) quando diff_individual >= 2."""
+            cards = []
+            for _, row in df_render.iterrows():
+                diff_home = abs(float(row.get("Lambda_Home", 0)) - float(row.get("Line_Home", 0)))
+                diff_away = abs(float(row.get("Lambda_Away", 0)) - float(row.get("Line_Away", 0)))
+
+                if diff_home >= 2:
+                    lado_over = float(row["Lambda_Home"]) > float(row["Line_Home"])
+                    lado      = "Over" if lado_over else "Under"
+                    odd_lado  = row["Odd_Over_Home"] if lado_over else row["Odd_Under_Home"]
+                    edge_lado = row["Edge_Over_Home"] if lado_over else row["Edge_Under_Home"]
+                    cards.append({
+                        "match": f"{row['HomeTeam']} vs {row['AwayTeam']}",
+                        "time":  f"🏠 {row['HomeTeam']}",
+                        "lado":  lado,
+                        "linha": row["Line_Home"],
+                        "odd":   odd_lado,
+                        "edge":  edge_lado,
+                        "lam":   row["Lambda_Home"],
+                        "diff":  diff_home,
+                    })
+
+                if diff_away >= 2:
+                    lado_over = float(row["Lambda_Away"]) > float(row["Line_Away"])
+                    lado      = "Over" if lado_over else "Under"
+                    odd_lado  = row["Odd_Over_Away"] if lado_over else row["Odd_Under_Away"]
+                    edge_lado = row["Edge_Over_Away"] if lado_over else row["Edge_Under_Away"]
+                    cards.append({
+                        "match": f"{row['HomeTeam']} vs {row['AwayTeam']}",
+                        "time":  f"✈️ {row['AwayTeam']}",
+                        "lado":  lado,
+                        "linha": row["Line_Away"],
+                        "odd":   odd_lado,
+                        "edge":  edge_lado,
+                        "lam":   row["Lambda_Away"],
+                        "diff":  diff_away,
+                    })
+
+            if not cards:
+                return
+            st.markdown(f'<div class="sec">{titulo}</div>', unsafe_allow_html=True)
+            for c in cards:
+                st.markdown(f"""
+                <div class="stake-card">
+                    <div class="stake-header">🎯 Aposta individual</div>
+                    <div class="stake-match">{c['match']}</div>
+                    <div class="stake-detail">
+                        {c['time']} &nbsp;·&nbsp; {c['lado']} {c['linha']}
+                        &nbsp;·&nbsp; odd {c['odd']:.2f}
+                        &nbsp;·&nbsp; {badge(c['edge'])}
+                        &nbsp;·&nbsp; λ {c['lam']:.2f} vs linha {c['linha']}
+                        &nbsp;·&nbsp; diff {c['diff']:.2f}
+                    </div>
+                    <div style="margin-top:8px;">
+                        <span style="font-size:11px;color:#6e7681;text-transform:uppercase;letter-spacing:.08em;">Stake &nbsp;</span>
+                        <span class="stake-val">1u</span>
+                    </div>
+                </div>""", unsafe_allow_html=True)
+
         if rodada_sel:
             hist_r = hist[hist["Rodada"].astype(str) == str(rodada_sel)]
             df_2   = hist_r[hist_r["diff"] >= 2].copy()
             df_1   = hist_r[(hist_r["diff"] >= 1) & (hist_r["diff"] < 2)].copy()
 
-            if df_2.empty and df_1.empty:
+            # Verificar se há apostas individuais disponíveis
+            tem_cols_ind = all(c in hist_r.columns for c in ["Lambda_Home","Line_Home","Lambda_Away","Line_Away"])
+
+            if df_2.empty and df_1.empty and (not tem_cols_ind):
                 st.info(f"Nenhum jogo com diff ≥ 1 na rodada {rodada_sel}.")
             else:
                 render_apostas(df_2, f"diff ≥ 2 — {liga_ativa} · Rodada {rodada_sel}")
                 render_apostas(df_1, f"diff ≥ 1 — {liga_ativa} · Rodada {rodada_sel}", stake_fixo=1)
 
-                df_resumo = pd.concat([df_2, df_1])
-                cols_show = ["HomeTeam","AwayTeam","Lambda_Total","Total_Line","diff","stake","Odd_Over_Total","Odd_Under_Total"]
-                cols_show = [c for c in cols_show if c in df_resumo.columns]
-                st.markdown('<div class="sec">Resumo</div>', unsafe_allow_html=True)
-                st.dataframe(df_resumo[cols_show].round(2), use_container_width=True, hide_index=True)
+                if tem_cols_ind:
+                    render_apostas_individuais(
+                        hist_r,
+                        f"diff ≥ 2 — Apostas Individuais · {liga_ativa} · Rodada {rodada_sel}"
+                    )
+
+                df_resumo = pd.concat([df_2, df_1]) if not (df_2.empty and df_1.empty) else pd.DataFrame()
+                if not df_resumo.empty:
+                    cols_show = ["HomeTeam","AwayTeam","Lambda_Total","Total_Line","diff","stake","Odd_Over_Total","Odd_Under_Total"]
+                    cols_show = [c for c in cols_show if c in df_resumo.columns]
+                    st.markdown('<div class="sec">Resumo</div>', unsafe_allow_html=True)
+                    st.dataframe(df_resumo[cols_show].round(2), use_container_width=True, hide_index=True)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # ABA HISTÓRICO
