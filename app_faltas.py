@@ -219,14 +219,6 @@ with st.sidebar:
                     "subtipo": "faltas_eu",
                 }
 
-                # Salvar automaticamente no Drive
-                if _DRIVE_OK and drive_disponivel():
-                    salvar_historico_drive(df_f, nome_liga, "faltas_eu")
-                    salvar_jogos_drive(df_j, nome_liga, "faltas_eu")
-                    if not df_h.empty:
-                        nome_csv = f"model_{nome_liga.lower().replace(' ','_')}FALTAS.csv"
-                        salvar_csv_drive(df_h, nome_csv, "faltas_eu")
-
                 st.success(f"'{nome_liga}' adicionada!")
                 st.rerun()
 
