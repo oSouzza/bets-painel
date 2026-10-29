@@ -616,8 +616,10 @@ with sc6: st.markdown(f'<div class="stat-pill"><div class="val">{avg_odd:.2f}</d
 
 st.markdown("")
 
-df_all["_date_key"] = df_all["Data"].dt.date.astype(str)
-datas_unicas = sorted([d for d in df_all["_date_key"].unique() if d not in ("NaT", "nan", "None", None)])
+df_all["_date_key"] = df_all["Data"].apply(
+    lambda x: x.strftime("%Y-%m-%d") if pd.notna(x) else None
+)
+datas_unicas = sorted([d for d in df_all["_date_key"].dropna().unique() if isinstance(d, str) and d not in ("NaT", "nan", "None")])
 
 for data_str in datas_unicas:
     grupo = df_all[df_all["_date_key"] == data_str]
