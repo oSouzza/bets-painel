@@ -144,17 +144,25 @@ def parse_date_brt(v):
     Converte a coluna de data para datetime com fuso BRT (UTC-3).
     Suporta:
       - ISO com tz info: "2026-10-27 17:30:00+00:00"  → converte para BRT
-      - ISO sem tz info: "2026-10-27 17:30:00"         → assume UTC, converte para BRT
-      - Só data:         "2026-10-27"                   → meia-noite BRT
+      - ISO sem tz info com hora: "2026-10-27 17:30:00" → assume UTC, converte para BRT
+      - Só data: "2026-10-27"                           → trata como data local (sem conversão UTC)
     """
     if pd.isna(v) or str(v).strip() in ("", "nan", "NaT"):
         return pd.NaT
+    s = str(v).strip()
+    # Data sem componente de hora → parse direto como data local, sem converter UTC→BRT
+    # (evita deslocamento de um dia: "2026-10-28" UTC meia-noite = "2026-10-27 21h" BRT)
+    if len(s) <= 10:
+        try:
+            return pd.to_datetime(s)
+        except Exception:
+            return pd.NaT
     try:
-        dt = pd.to_datetime(str(v), utc=True)          # força UTC se não tiver tz
+        dt = pd.to_datetime(s, utc=True)               # força UTC se não tiver tz
         return dt.tz_convert(BRT).replace(tzinfo=None)  # traz para BRT, remove tz para comparar
     except Exception:
         try:
-            return pd.to_datetime(str(v))
+            return pd.to_datetime(s)
         except Exception:
             return pd.NaT
 
@@ -609,7 +617,7 @@ with sc6: st.markdown(f'<div class="stat-pill"><div class="val">{avg_odd:.2f}</d
 st.markdown("")
 
 df_all["_date_key"] = df_all["Data"].dt.date.astype(str)
-datas_unicas = sorted(df_all["_date_key"].unique())
+datas_unicas = sorted([d for d in df_all["_date_key"].unique() if d not in ("NaT", "nan", "None", None)])
 
 for data_str in datas_unicas:
     grupo = df_all[df_all["_date_key"] == data_str]
